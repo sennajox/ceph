@@ -54,6 +54,7 @@ class JournalFilter
     inode(0),
     event_type(0) {}
 
+  bool get_range(uint64_t &start, uint64_t &end) const;
   bool apply(uint64_t pos, LogEvent &le) const;
   int parse_args(
     std::vector<const char*> &argv, 

@@ -341,18 +341,31 @@ int JournalTool::main_event(std::vector<const char*> &argv)
       return r;
     }
 
-    for (JournalScanner::EventMap::iterator i = js.events.begin(); i != js.events.end(); ++i) {
-      dout(4) << "Erasing offset 0x" << std::hex << i->first << std::dec << dendl;
-      // TODO: as well as overwriting selected events, give them a way
-      // to overwrite invalid and missing regions
-
-      int r = erase_region(i->first, i->second.raw_size);
+    uint64_t start, end;
+    if (filter.get_range(start, end)) {
+      // Special case for range filter: erase a numeric range in the log
+      uint64_t range = end - start;
+      int r = erase_region(start, range);
       if (r) {
-        derr << "Failed to erase event 0x" << std::hex << i->first << std::dec
+        derr << "Failed to erase region 0x" << std::hex << start << "~0x" << range << std::dec
              << ": " << cpp_strerror(r) << dendl;
         return r;
       }
+    } else {
+      // General case: erase a collection of individual entries in the log
+      for (JournalScanner::EventMap::iterator i = js.events.begin(); i != js.events.end(); ++i) {
+        dout(4) << "Erasing offset 0x" << std::hex << i->first << std::dec << dendl;
+
+        int r = erase_region(i->first, i->second.raw_size);
+        if (r) {
+          derr << "Failed to erase event 0x" << std::hex << i->first << std::dec
+               << ": " << cpp_strerror(r) << dendl;
+          return r;
+        }
+      }
     }
+
+
   } else {
     derr << "Unknown argument '" << command << "'" << dendl;
     usage();
@@ -531,17 +544,6 @@ int JournalScanner::scan_header()
   header_valid = true;
 
   return 0;
-}
-
-
-/**
- * Call this when having read from read_buf we find that 
- * the contents are not the start of a valid entry: discard
- * the current position as part of a gap.
- */
-void JournalScanner::gap_advance()
-{
-
 }
 
 
@@ -1276,3 +1278,27 @@ int JournalTool::erase_region(uint64_t const pos, uint64_t const length)
 
   return r;
 }
+
+
+/**
+ * If the filter params are only range, then return
+ * true and set start & end.  Else return false.
+ *
+ * Use this to discover if the user has requested a contiguous range
+ * rather than any per-event filtering.
+ */
+bool JournalFilter::get_range(uint64_t &start, uint64_t &end) const
+{
+  if (!path_expr.empty()
+      || inode != 0
+      || event_type != 0
+      || frag.ino != 0
+      || client_name.num() != 0) {
+    return false;
+  } else {
+    start = range_start;
+    end = range_end;
+    return true;
+  }
+}
+
