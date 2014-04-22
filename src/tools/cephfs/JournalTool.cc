@@ -62,10 +62,6 @@ void JournalTool::usage()
   generic_client_usage();
 }
 
-JournalTool::~JournalTool()
-{
-}
-
 
 /**
  * Handle arguments and hand off to journal/header/event mode

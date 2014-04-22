@@ -111,7 +111,6 @@ class JournalTool : public MDSUtility
     void usage();
     JournalTool() :
       rank(0) {}
-    ~JournalTool();
     int main(std::vector<const char*> &argv);
 };
 
