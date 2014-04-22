@@ -74,6 +74,9 @@ bin_PROGRAMS += rados
 cephfs_journal_tool_SOURCES = \
 	tools/cephfs/cephfs-journal-tool.cc \
 	tools/cephfs/JournalTool.cc \
+	tools/cephfs/JournalFilter.cc \
+	tools/cephfs/JournalScanner.cc \
+	tools/cephfs/EventOutput.cc \
 	tools/cephfs/Dumper.cc \
 	tools/cephfs/Resetter.cc \
 	tools/cephfs/MDSUtility.cc

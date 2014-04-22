@@ -1,49 +1,38 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:c++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
 // vim: ts=8 sw=2 smarttab
 /*
- * Ceph - scalable distributed file system
+ * ceph - scalable distributed file system
  *
- * Copyright (C) 2014 John Spray <john.spray@inktank.com>
+ * copyright (c) 2014 john spray <john.spray@inktank.com>
  *
- * This is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License version 2.1, as published by the Free Software
- * Foundation.  See file COPYING.
+ * this is free software; you can redistribute it and/or
+ * modify it under the terms of the gnu lesser general public
+ * license version 2.1, as published by the free software
+ * foundation.  see file copying.
  */
 
 
 #include <sstream>
-#include <fstream>
 
 #include "common/ceph_argparse.h"
 #include "common/errno.h"
 #include "osdc/Journaler.h"
 #include "mds/mdstypes.h"
 #include "mds/LogEvent.h"
+
 #include "mds/events/ENoOp.h"
-
 #include "mds/events/EUpdate.h"
-#include "mds/events/ESession.h"
 
-
+#include "JournalScanner.h"
+#include "EventOutput.h"
 #include "Dumper.h"
 #include "Resetter.h"
+
 #include "JournalTool.h"
+
 
 #define dout_subsys ceph_subsys_mds
 
-
-const string JournalFilter::range_separator("..");
-
-
-static std::string obj_name(uint64_t offset, int const rank)
-{
-  char header_name[60];
-  snprintf(header_name, sizeof(header_name), "%llx.%08llx",
-      (unsigned long long)(MDS_INO_LOG_OFFSET + rank),
-      (unsigned long long)offset);
-  return std::string(header_name);
-}
 
 
 void JournalTool::usage()
@@ -241,7 +230,7 @@ int JournalTool::main_header(std::vector<const char*> &argv)
     dout(4) << "Writing object..." << dendl;
     bufferlist header_bl;
     ::encode(*(js.header), header_bl);
-    io.write_full(obj_name(0, rank), header_bl);
+    io.write_full(JournalScanner::obj_name(0, rank), header_bl);
     dout(4) << "Write complete." << dendl;
   } else {
     derr << "Bad header command '" << command << "'" << dendl;
@@ -378,7 +367,7 @@ int JournalTool::main_event(std::vector<const char*> &argv)
 
   // Generate output
   // ===============
-  EventOutputter output(js, output_path);
+  EventOutput output(js, output_path);
   if (output_style == "binary") {
       output.binary();
   } else if (output_style == "json") {
@@ -483,571 +472,6 @@ int JournalTool::journal_reset()
   return r;
 }
 
-
-/**
- * Read journal header, followed by sequential scan through journal space.
- *
- * Return 0 on success, else error code.  Note that success has the special meaning
- * that we were able to apply our checks, it does *not* mean that the journal is
- * healthy.
- */
-int JournalScanner::scan(bool const full)
-{
-  int r = 0;
-
-
-  r = scan_header();
-  if (r < 0) {
-    return r;
-  }
-  if (full) {
-    r = scan_events();
-    if (r < 0) {
-      return r;
-    }
-  }
-
-  return 0;
-}
-
-int JournalScanner::scan_header()
-{
-  int r;
-
-  bufferlist header_bl;
-  std::string header_name = obj_name(0, rank);
-  dout(4) << "JournalScanner::scan: reading header object '" << header_name << "'" << dendl;
-  r = io.read(header_name, header_bl, INT_MAX, 0);
-  if (r < 0) {
-    derr << "Header " << header_name << " is unreadable" << dendl;
-    return 0;  // "Successfully" found an error
-  } else {
-    header_present = true;
-  }
-
-  bufferlist::iterator header_bl_i = header_bl.begin();
-  header = new Journaler::Header();
-  try
-  {
-    header->decode(header_bl_i);
-  }
-  catch (buffer::error e)
-  {
-    derr << "Header is corrupt (" << e.what() << ")" << dendl;
-    return 0;  // "Successfully" found an error
-  }
-
-  if (header->magic != std::string(CEPH_FS_ONDISK_MAGIC)) {
-    derr << "Header is corrupt (bad magic)" << dendl;
-    return 0;  // "Successfully" found an error
-  }
-  if (!((header->trimmed_pos <= header->expire_pos) && (header->expire_pos <= header->write_pos))) {
-    derr << "Header is corrupt (inconsistent offsets)" << dendl;
-    return 0;  // "Successfully" found an error
-  }
-  header_valid = true;
-
-  return 0;
-}
-
-
-int JournalScanner::scan_events()
-{
-  int r;
-
-  uint64_t object_size = g_conf->mds_log_segment_size;
-  if (object_size == 0) {
-    // Default layout object size
-    object_size = g_default_file_layout.fl_object_size;
-  }
-
-  uint64_t read_offset = header->expire_pos;
-  dout(10) << std::hex << "Header 0x"
-    << header->trimmed_pos << " 0x"
-    << header->expire_pos << " 0x"
-    << header->write_pos << std::dec << dendl;
-  dout(10) << "Starting journal scan from offset 0x" << std::hex << read_offset << std::dec << dendl;
-
-  // TODO also check for extraneous objects before the trimmed pos or after the write pos,
-  // which would indicate a bogus header.
-
-  bufferlist read_buf;
-  bool gap = false;
-  uint64_t gap_start = -1;
-  for (uint64_t obj_offset = (read_offset / object_size); ; obj_offset++) {
-    // Read this journal segment
-    bufferlist this_object;
-    std::string const oid = obj_name(obj_offset, rank);
-    r = io.read(oid, this_object, INT_MAX, 0);
-
-    // Handle absent journal segments
-    if (r < 0) {
-      if (obj_offset > (header->write_pos / object_size)) {
-        dout(4) << "Reached end of journal objects" << dendl;
-        break;
-      } else {
-        derr << "Missing object " << oid << dendl;
-      }
-
-      objects_missing.push_back(obj_offset);
-      gap = true;
-      gap_start = read_offset;
-      continue;
-    } else {
-      dout(4) << "Read 0x" << std::hex << this_object.length() << std::dec
-              << " bytes from " << oid << " gap=" << gap << dendl;
-      objects_valid.push_back(oid);
-      this_object.copy(0, this_object.length(), read_buf);
-    }
-
-    if (gap) {
-      // No valid data at the current read offset, scan forward until we find something valid looking
-      // or have to drop out to load another object.
-      dout(4) << "Searching for sentinel from 0x" << std::hex << read_offset
-              << ", 0x" << read_buf.length() << std::dec << " bytes available" << dendl;
-
-      do {
-        bufferlist::iterator p = read_buf.begin();
-        uint64_t candidate_sentinel;
-        ::decode(candidate_sentinel, p);
-
-        dout(4) << "Data at 0x" << std::hex << read_offset << " = 0x" << candidate_sentinel << std::dec << dendl;
-
-        if (candidate_sentinel == JournalStream::sentinel) {
-          dout(4) << "Found sentinel at 0x" << std::hex << read_offset << std::dec << dendl;
-          ranges_invalid.push_back(Range(gap_start, read_offset));
-          gap = false;
-          break;
-        } else {
-          // No sentinel, discard this byte
-          read_buf.splice(0, 1);
-          read_offset += 1;
-        }
-      } while (read_buf.length() >= sizeof(JournalStream::sentinel));
-      dout(4) << "read_buf size is " << read_buf.length() << dendl;
-    } else {
-      dout(10) << "Parsing data, 0x" << std::hex << read_buf.length() << std::dec << " bytes available" << dendl;
-      while(true) {
-        // TODO: detect and handle legacy format journals: can do many things
-        // on them but on read errors have to give up instead of searching
-        // for sentinels.
-        JournalStream journal_stream(JOURNAL_FORMAT_RESILIENT);
-        bool readable = false;
-        try {
-          uint64_t need;
-          readable = journal_stream.readable(read_buf, need);
-        } catch (buffer::error e) {
-          readable = false;
-          dout(4) << "Invalid container encoding at 0x" << std::hex << read_offset << std::dec << dendl;
-          gap = true;
-          gap_start = read_offset;
-          read_buf.splice(0, 1);
-          read_offset += 1;
-          break;
-        }
-
-        if (!readable) {
-          // Out of data, continue to read next object
-          break;
-        }
-
-        bufferlist le_bl;  //< Serialized LogEvent blob
-        dout(10) << "Attempting decode at 0x" << std::hex << read_offset << std::dec << dendl;
-        // This cannot fail to decode because we pre-checked that a serialized entry
-        // blob would be readable.
-        uint64_t start_ptr = 0;
-        uint64_t consumed = journal_stream.read(read_buf, le_bl, start_ptr);
-        dout(10) << "Consumed 0x" << std::hex << consumed << std::dec << " bytes" << dendl;
-        if (start_ptr != read_offset) {
-          derr << "Bad entry start ptr (0x" << std::hex << start_ptr << ") at 0x"
-              << read_offset << std::dec << dendl;
-          gap = true;
-          gap_start = read_offset;
-          // FIXME: given that entry was invalid, should we be skipping over it?
-          // maybe push bytes back onto start of read_buf and just advance one byte
-          // to start scanning instead.  e.g. if a bogus size value is found it can
-          // cause us to consume and thus skip a bunch of following valid events.
-          read_offset += consumed;
-          break;
-        }
-
-        LogEvent *le = LogEvent::decode(le_bl);
-        if (le) {
-          dout(10) << "Valid entry at 0x" << std::hex << read_offset << std::dec << dendl;
-
-          if (filter.apply(read_offset, *le)) {
-            events[read_offset] = EventRecord(le, consumed);
-          } else {
-            delete le;
-          }
-          events_valid.push_back(read_offset);
-          read_offset += consumed;
-        } else {
-          dout(10) << "Invalid entry at 0x" << std::hex << read_offset << std::dec << dendl;
-          gap = true;
-          gap_start = read_offset;
-          read_offset += consumed;
-        }
-      }
-    }
-  }
-
-  if (gap) {
-    // Ended on a gap, assume it ran to end
-    ranges_invalid.push_back(Range(gap_start, -1));
-  }
-
-  dout(4) << "Scanned objects, " << objects_missing.size() << " missing, " << objects_valid.size() << " valid" << dendl;
-  dout(4) << "Events scanned, " << ranges_invalid.size() << " gaps" << dendl;
-  dout(4) << "Found " << events_valid.size() << " valid events" << dendl;
-  dout(4) << "Selected " << events.size() << " events events for processing" << dendl;
-
-  return 0;
-}
-
-JournalScanner::~JournalScanner()
-{
-  if (header) {
-    delete header;
-    header = NULL;
-  }
-  dout(4) << events.size() << " events" << dendl;
-  for (EventMap::iterator i = events.begin(); i != events.end(); ++i) {
-    delete i->second.log_event;
-  }
-  events.clear();
-}
-
-/**
- * Whether the journal data looks valid and replayable
- */
-bool JournalScanner::is_healthy() const
-{
-  return (header_present && header_valid && ranges_invalid.empty() && objects_missing.empty());
-}
-
-/**
- * Whether the journal data can be read from RADOS
- */
-bool JournalScanner::is_readable() const
-{
-  return (header_present && header_valid && objects_missing.empty());
-}
-
-/*
- * Return whether a LogEvent is to be included or excluded.
- *
- * The filter parameters are applied on an AND basis: if any
- * condition is not met, the event is excluded.  Try to do
- * the fastest checks first.
- */
-bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
-{
-  /* Filtering by journal offset range */
-  if (pos < range_start || pos >= range_end) {
-    return false;
-  }
-
-  /* Filtering by event type */
-  if (event_type != 0) {
-    if (le.get_type() != event_type) {
-      return false;
-    }
-  }
-
-  /* Filtering by client */
-  if (client_name.num()) {
-    EMetaBlob *metablob = le.get_metablob();
-    if (metablob) {
-      if (metablob->get_client_name() != client_name) {
-        return false;
-      }
-    } else if (le.get_type() == EVENT_SESSION) {
-      ESession *es = reinterpret_cast<ESession*>(&le);
-      if (es->get_client_inst().name != client_name) {
-        return false;
-      }
-    } else {
-      return false;
-    }
-  }
-
-  /* Filtering by inode */
-  if (inode) {
-    EMetaBlob *metablob = le.get_metablob();
-    if (metablob) {
-      std::set<inodeno_t> inodes;
-      metablob->get_inodes(inodes);
-      bool match_any = false;
-      for (std::set<inodeno_t>::iterator i = inodes.begin(); i != inodes.end(); ++i) {
-        if (*i == inode) {
-          match_any = true;
-          break;
-        }
-      }
-      if (!match_any) {
-        return false;
-      }
-    } else {
-      return false;
-    }
-  }
-
-  /* Filtering by frag and dentry */
-  if (!frag_dentry.empty() || frag.ino) {
-    EMetaBlob *metablob = le.get_metablob();
-    if (metablob) {
-      std::map<dirfrag_t, std::set<std::string> > dentries;
-      metablob->get_dentries(dentries);
-
-      if (frag.ino) {
-        bool match_any = false;
-        for (std::map<dirfrag_t, std::set<std::string> >::iterator i = dentries.begin();
-            i != dentries.end(); ++i) {
-          if (i->first == frag) {
-            match_any = true;
-            break;
-          }
-        }
-        if (!match_any) {
-          return false;
-        }
-      }
-
-      if (!frag_dentry.empty()) {
-        bool match_any = false;
-        for (std::map<dirfrag_t, std::set<std::string> >::iterator i = dentries.begin();
-            i != dentries.end() && !match_any; ++i) {
-          std::set<std::string> const &names = i->second;
-          for (std::set<std::string>::iterator j = names.begin();
-              j != names.end() && !match_any; ++j) {
-            if (*j == frag_dentry) {
-              match_any = true;
-            }
-          }
-        }
-        if (!match_any) {
-          return false;
-        }
-      }
-
-    } else {
-      return false;
-    }
-  }
-
-  /* Filtering by file path */
-  if (!path_expr.empty()) {
-    EMetaBlob *metablob = le.get_metablob();
-    if (metablob) {
-      std::vector<std::string> paths;
-      metablob->get_paths(paths);
-      bool match_any = false;
-      for (std::vector<std::string>::iterator p = paths.begin(); p != paths.end(); ++p) {
-        if ((*p).find(path_expr) != std::string::npos) {
-          match_any = true;
-          break;
-        }
-      }
-      if (!match_any) {
-        return false;
-      }
-    } else {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-void EventOutputter::binary() const
-{
-  // Binary output, files
-  int r = ::mkdir(path.c_str(), 0755);
-  if (r != 0) {
-    derr << "Error creating output directory: " << cpp_strerror(r) << dendl;
-    assert(r == 0);
-  }
-
-  for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
-    LogEvent *le = i->second.log_event;
-    bufferlist le_bin;
-    le->encode(le_bin);
-
-    std::stringstream filename;
-    filename << "0x" << std::hex << i->first << std::dec << "_" << le->get_type_str() << ".bin";
-    std::string const file_path = path + std::string("/") + filename.str();
-    std::ofstream bin_file(file_path.c_str(), std::ofstream::out | std::ofstream::binary);
-    le_bin.write_stream(bin_file);
-    bin_file.close();
-  }
-  dout(1) << "Wrote output to binary files in directory '" << path << "'" << dendl;
-}
-
-void EventOutputter::json() const
-{
-  JSONFormatter jf(true);
-  std::ofstream out_file(path.c_str(), std::ofstream::out);
-  jf.open_array_section("journal");
-  {
-    for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
-      LogEvent *le = i->second.log_event;
-      jf.open_object_section("log_event");
-      {
-        le->dump(&jf);
-      }
-      jf.close_section();  // log_event
-    }
-  }
-  jf.close_section();  // journal
-  jf.flush(out_file);
-  out_file.close();
-  dout(1) << "Wrote output to JSON file '" << path << "'" << dendl;
-}
-
-void EventOutputter::list() const
-{
-  for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
-    std::vector<std::string> ev_paths;
-    EMetaBlob *emb = i->second.log_event->get_metablob();
-    if (emb) {
-      emb->get_paths(ev_paths);
-    }
-
-    std::string detail;
-    if (i->second.log_event->get_type() == EVENT_UPDATE) {
-      EUpdate *eu = reinterpret_cast<EUpdate*>(i->second.log_event);
-      detail = eu->type;
-    }
-
-    dout(1) << "0x"
-      << std::hex << i->first << std::dec << " "
-      << i->second.log_event->get_type_str() << ": "
-      << " (" << detail << ")" << dendl;
-    for (std::vector<std::string>::iterator i = ev_paths.begin(); i != ev_paths.end(); ++i) {
-      dout(1) << "  " << *i << dendl;
-    }
-  }
-}
-
-void EventOutputter::summary() const
-{
-  std::map<std::string, int> type_count;
-  for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
-    std::string const type = i->second.log_event->get_type_str();
-    if (type_count.count(type) == 0) {
-      type_count[type] = 0;
-    }
-    type_count[type] += 1;
-  }
-
-  dout(1) << "Events by type:" << dendl;
-  for (std::map<std::string, int>::iterator i = type_count.begin(); i != type_count.end(); ++i) {
-    dout(1) << "  " << i->first << ": " << i->second << dendl;
-  }
-}
-
-int JournalFilter::parse_args(
-  std::vector<const char*> &argv, 
-  std::vector<const char*>::iterator &arg)
-{
-  while(arg != argv.end()) {
-    std::string arg_str;
-    if (ceph_argparse_witharg(argv, arg, &arg_str, "--range", (char*)NULL)) {
-      size_t sep_loc = arg_str.find(JournalFilter::range_separator);
-      if (sep_loc == std::string::npos || arg_str.size() <= JournalFilter::range_separator.size()) {
-        derr << "Invalid range '" << arg_str << "'" << dendl;
-        return -EINVAL;
-      }
-
-      // We have a lower bound
-      if (sep_loc > 0) {
-        std::string range_start_str = arg_str.substr(0, sep_loc); 
-        std::string parse_err;
-        range_start = strict_strtoll(range_start_str.c_str(), 0, &parse_err);
-        if (!parse_err.empty()) {
-          derr << "Invalid lower bound '" << range_start_str << "': " << parse_err << dendl;
-          return -EINVAL;
-        }
-      }
-
-      if (sep_loc < arg_str.size() - JournalFilter::range_separator.size()) {
-        std::string range_end_str = arg_str.substr(sep_loc + range_separator.size()); 
-        std::string parse_err;
-        range_end = strict_strtoll(range_end_str.c_str(), 0, &parse_err);
-        if (!parse_err.empty()) {
-          derr << "Invalid upper bound '" << range_end_str << "': " << parse_err << dendl;
-          return -EINVAL;
-        }
-      }
-    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--path", (char*)NULL)) {
-      dout(4) << "Filtering by path '" << arg_str << "'" << dendl;
-      path_expr = arg_str;
-    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--inode", (char*)NULL)) {
-      dout(4) << "Filtering by inode '" << arg_str << "'" << dendl;
-      std::string parse_err;
-      inode = strict_strtoll(arg_str.c_str(), 0, &parse_err);
-      if (!parse_err.empty()) {
-        derr << "Invalid inode '" << arg_str << "': " << parse_err << dendl;
-        return -EINVAL;
-      }
-    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--type", (char*)NULL)) {
-      std::string parse_err;
-      event_type = LogEvent::str_to_type(arg_str);
-      if (event_type == LogEvent::EventType(-1)) {
-        derr << "Invalid event type '" << arg_str << "': " << parse_err << dendl;
-        return -EINVAL;
-      }
-
-    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--frag", (char*)NULL)) {
-      std::string const frag_sep = ".";
-      size_t sep_loc = arg_str.find(frag_sep);
-      std::string inode_str;
-      std::string frag_str;
-      if (sep_loc != std::string::npos) {
-        inode_str = arg_str.substr(0, sep_loc);
-        frag_str = arg_str.substr(sep_loc + 1);
-      } else {
-        inode_str = arg_str;
-        frag_str = "0";
-      }
-
-      std::string parse_err;
-      inodeno_t frag_ino = strict_strtoll(inode_str.c_str(), 0, &parse_err);
-      if (!parse_err.empty()) {
-        derr << "Invalid inode '" << inode_str << "': " << parse_err << dendl;
-        return -EINVAL;
-      }
-
-      uint32_t frag_enc = strict_strtoll(frag_str.c_str(), 0, &parse_err);
-      if (!parse_err.empty()) {
-        derr << "Invalid frag '" << frag_str << "': " << parse_err << dendl;
-        return -EINVAL;
-      }
-
-      frag = dirfrag_t(frag_ino, frag_t(frag_enc));
-      dout(4) << "dirfrag filter: '" << frag << "'" << dendl;
-    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--dname", (char*)NULL)) {
-      frag_dentry = arg_str;
-      dout(4) << "dentry filter: '" << frag_dentry << "'" << dendl;
-    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--client", (char*)NULL)) {
-      std::string parse_err;
-      int64_t client_num = strict_strtoll(arg_str.c_str(), 0, &parse_err);
-      if (!parse_err.empty()) {
-        derr << "Invalid client number " << arg_str << dendl;
-        return -EINVAL;
-      }
-      client_name = entity_name_t::CLIENT(client_num);
-      
-      dout(4) << "dentry filter: '" << frag_dentry << "'" << dendl;
-    } else {
-      // We're done with args the filter understands
-      break;
-    }
-  }
-
-  return 0;
-}
 
 int JournalTool::replay_offline(EMetaBlob &metablob, bool const dry_run)
 {
@@ -1265,7 +689,7 @@ int JournalTool::erase_region(uint64_t const pos, uint64_t const length)
   uint64_t obj_offset = (pos / object_size);
   int r = 0;
   while(log_data.length()) {
-    std::string const oid = obj_name(obj_offset, rank);
+    std::string const oid = JournalScanner::obj_name(obj_offset, rank);
     uint32_t offset_in_obj = write_offset % object_size;
     uint32_t write_len = min(log_data.length(), object_size - offset_in_obj);
 
@@ -1286,28 +710,5 @@ int JournalTool::erase_region(uint64_t const pos, uint64_t const length)
   }
 
   return r;
-}
-
-
-/**
- * If the filter params are only range, then return
- * true and set start & end.  Else return false.
- *
- * Use this to discover if the user has requested a contiguous range
- * rather than any per-event filtering.
- */
-bool JournalFilter::get_range(uint64_t &start, uint64_t &end) const
-{
-  if (!path_expr.empty()
-      || inode != 0
-      || event_type != 0
-      || frag.ino != 0
-      || client_name.num() != 0) {
-    return false;
-  } else {
-    start = range_start;
-    end = range_end;
-    return true;
-  }
 }
 
