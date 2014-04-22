@@ -20,10 +20,11 @@
 #include "common/entity_name.h"
 #include "common/errno.h"
 #include "common/safe_io.h"
-#include "mds/Dumper.h"
 #include "mds/mdstypes.h"
 #include "mds/LogEvent.h"
 #include "osdc/Journaler.h"
+
+#include "Dumper.h"
 
 #define dout_subsys ceph_subsys_mds
 

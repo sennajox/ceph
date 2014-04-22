@@ -15,7 +15,7 @@
 #define JOURNAL_DUMPER_H_
 
 
-#include "mds/MDSUtility.h"
+#include "MDSUtility.h"
 #include "osdc/Journaler.h"
 
 /**

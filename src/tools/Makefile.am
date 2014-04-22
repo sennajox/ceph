@@ -71,8 +71,13 @@ rados_SOURCES += common/obj_bencher.cc # needs cleanup so it can go in libcommon
 rados_LDADD = libcls_lock_client.la $(LIBRADOS) $(CEPH_GLOBAL)
 bin_PROGRAMS += rados
 
-cephfs_journal_tool_SOURCES = tools/cephfs-journal-tool.cc mds/JournalTool.cc mds/Resetter.cc mds/Dumper.cc mds/MDSUtility.cc
-cephfs_journal_tool_LDADD = -lboost_system -lboost_filesystem $(LIBMDS) $(LIBRADOS) $(CEPH_GLOBAL)
+cephfs_journal_tool_SOURCES = \
+	tools/cephfs/cephfs-journal-tool.cc \
+	tools/cephfs/JournalTool.cc \
+	tools/cephfs/Dumper.cc \
+	tools/cephfs/Resetter.cc \
+	tools/cephfs/MDSUtility.cc
+cephfs_journal_tool_LDADD = $(LIBMDS) $(LIBRADOS) $(CEPH_GLOBAL)
 bin_PROGRAMS += cephfs-journal-tool
 
 if WITH_REST_BENCH
@@ -103,6 +108,13 @@ ceph_mon_store_converter_LDADD = $(LIBMON) $(LIBOS) $(CEPH_GLOBAL)
 bin_PROGRAMS += ceph_mon_store_converter
 
 noinst_HEADERS += \
+	tools/cephfs/JournalTool.h \
+	tools/cephfs/JournalScanner.h \
+	tools/cephfs/JournalFilter.h \
+	tools/cephfs/EventOutput.h \
+	tools/cephfs/Resetter.h \
+	tools/cephfs/Dumper.h \
+	tools/cephfs/MDSUtility.h \
 	tools/rados/rados_sync.h \
 	tools/common.h
 

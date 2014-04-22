@@ -1,25 +1,33 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
 // vim: ts=8 sw=2 smarttab
+/*
+ * Ceph - scalable distributed file system
+ *
+ * Copyright (C) 2014 John Spray <john.spray@inktank.com>
+ *
+ * This is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License version 2.1, as published by the Free Software
+ * Foundation.  See file COPYING.
+ */
 
 
 #include <sstream>
-#include <boost/system/error_code.hpp>
-#include <boost/filesystem/convenience.hpp>
-#include <boost/filesystem/fstream.hpp>
+#include <fstream>
 
 #include "common/ceph_argparse.h"
 #include "common/errno.h"
 #include "osdc/Journaler.h"
 #include "mds/mdstypes.h"
 #include "mds/LogEvent.h"
-#include "mds/Dumper.h"
-#include "mds/Resetter.h"
 #include "mds/events/ENoOp.h"
 
 #include "mds/events/EUpdate.h"
 #include "mds/events/ESession.h"
 
 
+#include "Dumper.h"
+#include "Resetter.h"
 #include "JournalTool.h"
 
 #define dout_subsys ceph_subsys_mds
@@ -859,7 +867,12 @@ bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
 void EventOutputter::binary() const
 {
   // Binary output, files
-  boost::filesystem::create_directories(boost::filesystem::path(path));
+  int r = ::mkdir(path.c_str(), 0755);
+  if (r != 0) {
+    derr << "Error creating output directory: " << cpp_strerror(r) << dendl;
+    assert(r == 0);
+  }
+
   for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
     LogEvent *le = i->second.log_event;
     bufferlist le_bin;
@@ -868,7 +881,7 @@ void EventOutputter::binary() const
     std::stringstream filename;
     filename << "0x" << std::hex << i->first << std::dec << "_" << le->get_type_str() << ".bin";
     std::string const file_path = path + std::string("/") + filename.str();
-    boost::filesystem::ofstream bin_file(file_path, std::ofstream::out | std::ofstream::binary);
+    std::ofstream bin_file(file_path.c_str(), std::ofstream::out | std::ofstream::binary);
     le_bin.write_stream(bin_file);
     bin_file.close();
   }
@@ -878,7 +891,7 @@ void EventOutputter::binary() const
 void EventOutputter::json() const
 {
   JSONFormatter jf(true);
-  boost::filesystem::ofstream out_file(path, std::ofstream::out);
+  std::ofstream out_file(path.c_str(), std::ofstream::out);
   jf.open_array_section("journal");
   {
     for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
