@@ -397,11 +397,11 @@ int JournalTool::journal_inspect()
   JournalScanner js(io, rank, filter);
   r = js.scan();
   if (r) {
-    derr << "Failed to scan journal (" << cpp_strerror(r) << ")" << dendl;
+    std::cerr << "Failed to scan journal (" << cpp_strerror(r) << ")" << std::endl;
     return r;
   }
 
-  dout(1) << "Journal scanned, healthy=" << js.is_healthy() << dendl;
+  js.report(std::cout);
 
   return 0;
 }

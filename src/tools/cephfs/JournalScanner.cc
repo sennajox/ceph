@@ -283,3 +283,33 @@ std::string JournalScanner::obj_name(uint64_t offset, int const rank)
   return std::string(header_name);
 }
 
+
+void JournalScanner::report(std::ostream &out) const
+{
+  out << "Overall journal integrity: " << (is_healthy() ? "OK" : "DAMAGED") << std::endl;
+
+  if (!header_present) {
+    out << "Header not found" << std::endl;
+  }
+
+  if (header_present && !header_valid) {
+    out << "Header could not be decoded" << std::endl;
+  }
+
+  if (objects_missing.size()) {
+    out << "Objects missing:" << std::endl;
+    for (std::vector<uint64_t>::const_iterator om = objects_missing.begin();
+         om != objects_missing.end(); ++om) {
+      out << "  0x" << std::hex << *om << std::dec << std::endl;
+    }
+  }
+
+  if (ranges_invalid.size()) {
+    out << "Corrupt regions:" << std::endl;
+    for (std::vector<Range>::const_iterator r = ranges_invalid.begin();
+         r != ranges_invalid.end(); ++r) {
+      out << "  0x" << std::hex << r->first << "-" << r->second << std::dec << std::endl;
+    }
+  }
+}
+

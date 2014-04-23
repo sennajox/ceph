@@ -66,6 +66,7 @@ class JournalScanner
   int scan(bool const full=true);
   int scan_header();
   int scan_events();
+  void report(std::ostream &out) const;
 
   static std::string obj_name(uint64_t offset, int const rank);
 
