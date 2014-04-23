@@ -188,9 +188,11 @@ int JournalTool::main_header(std::vector<const char*> &argv)
   arg = argv.erase(arg);
 
   if (command == std::string("get")) {
+    // Write JSON journal dump to stdout
     JSONFormatter jf(true);
     js.header->dump(&jf);
     jf.flush(std::cout);
+    std::cout << std::endl;
   } else if (command == std::string("set")) {
     // Need two more args <key> <val>
     if (argv.size() != 2) {
