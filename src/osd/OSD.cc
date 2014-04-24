@@ -7341,7 +7341,6 @@ void OSD::check_replay_queue()
 
   for (list< pair<spg_t,utime_t> >::iterator p = pgids.begin(); p != pgids.end(); ++p) {
     spg_t pgid = p->first;
-    // TODO: should we just hold the lock the whole time we're looping instead?
     pg_map_lock.get_read();
     if (pg_map.count(pgid)) {
       PG *pg = _lookup_lock_pg_with_map_lock_held(pgid);
