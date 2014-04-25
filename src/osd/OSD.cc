@@ -2997,7 +2997,7 @@ void OSD::handle_osd_ping(MOSDPing *m)
 	if (is_active()) {
 	  ConnectionRef con = service.get_con_osd_cluster(from, curmap->get_epoch());
 	  if (con) {
-	    _share_map_outgoing(from, con.get());
+	    service.share_map_outgoing(from, con.get());
 	  }
 	}
       } else if (!curmap->exists(from) ||
@@ -3044,7 +3044,7 @@ void OSD::handle_osd_ping(MOSDPing *m)
 	if (is_active()) {
 	  ConnectionRef con = service.get_con_osd_cluster(from, curmap->get_epoch());
 	  if (con) {
-	    _share_map_outgoing(from, con.get());
+	    service.share_map_outgoing(from, con.get());
 	  }
 	}
       }
@@ -3945,7 +3945,7 @@ void OSDService::send_message_osd_cluster(int peer, Message *m, epoch_t from_epo
   }
   const entity_inst_t& peer_inst = next_map->get_cluster_inst(peer);
   Connection *peer_con = osd->cluster_messenger->get_connection(peer_inst).get();
-  osd->_share_map_outgoing(peer, peer_con, next_map);
+  share_map_outgoing(peer, peer_con, next_map);
   osd->cluster_messenger->send_message(m, peer_inst);
   release_map(next_map);
 }
@@ -4755,17 +4755,17 @@ void OSDService::share_map_incoming(
 }
 
 
-void OSD::_share_map_outgoing(int peer, Connection *con, OSDMapRef map)
+void OSDService::share_map_outgoing(int peer, Connection *con, OSDMapRef map)
 {
   if (!map)
-    map = service.get_osdmap();
+    map = get_osdmap();
 
   // send map?
-  epoch_t pe = service.get_peer_epoch(peer);
+  epoch_t pe = get_peer_epoch(peer);
   if (pe) {
     if (pe < map->get_epoch()) {
-      service.send_incremental_map(pe, con, map);
-      service.note_peer_epoch(peer, map->get_epoch());
+      send_incremental_map(pe, con, map);
+      note_peer_epoch(peer, map->get_epoch());
     } else
       dout(20) << "_share_map_outgoing " << con << " already has epoch " << pe << dendl;
   } else {
@@ -6795,7 +6795,7 @@ void OSD::do_notifies(
       it->first, curmap->get_epoch());
     if (!con)
       continue;
-    _share_map_outgoing(it->first, con.get(), curmap);
+    service.share_map_outgoing(it->first, con.get(), curmap);
     if (con->has_feature(CEPH_FEATURE_INDEP_PG_MAP)) {
       dout(7) << "do_notify osd " << it->first
 	      << " on " << it->second.size() << " PGs" << dendl;
@@ -6835,7 +6835,7 @@ void OSD::do_queries(map<int, map<spg_t,pg_query_t> >& query_map,
     ConnectionRef con = service.get_con_osd_cluster(who, curmap->get_epoch());
     if (!con)
       continue;
-    _share_map_outgoing(who, con.get(), curmap);
+    service.share_map_outgoing(who, con.get(), curmap);
     if (con->has_feature(CEPH_FEATURE_INDEP_PG_MAP)) {
       dout(7) << "do_queries querying osd." << who
 	      << " on " << pit->second.size() << " PGs" << dendl;
@@ -6879,7 +6879,7 @@ void OSD::do_infos(map<int,
       p->first, curmap->get_epoch());
     if (!con)
       continue;
-    _share_map_outgoing(p->first, con.get(), curmap);
+    service.share_map_outgoing(p->first, con.get(), curmap);
     if (con->has_feature(CEPH_FEATURE_INDEP_PG_MAP)) {
       MOSDPGInfo *m = new MOSDPGInfo(curmap->get_epoch());
       m->pg_list = p->second;
@@ -7257,7 +7257,7 @@ void OSD::handle_pg_query(OpRequestRef op)
 	  it->second.from, it->second.to,
 	  osdmap->get_epoch(), empty,
 	  it->second.epoch_sent);
-	_share_map_outgoing(from, con.get(), osdmap);
+	service.share_map_outgoing(from, con.get(), osdmap);
 	cluster_messenger->send_message(mlog, con.get());
       }
     } else {

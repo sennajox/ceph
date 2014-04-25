@@ -435,6 +435,8 @@ public:
                         OSDMapRef& osdmap, const epoch_t *sent_epoch_p);
   void share_map_incoming(entity_name_t name, Connection *con, epoch_t epoch,
                           OSDMapRef& osdmap, epoch_t *sent_epoch_p);
+  void share_map_outgoing(int peer, Connection *con,
+                          OSDMapRef map = OSDMapRef());
 
   ConnectionRef get_con_osd_cluster(int peer, epoch_t from_epoch);
   pair<ConnectionRef,ConnectionRef> get_con_osd_hb(int peer, epoch_t from_epoch);  // (back, front)
@@ -1383,9 +1385,6 @@ private:
   list<OpRequestRef>  waiting_for_osdmap;
 
   friend struct send_map_on_destruct;
-
-  void _share_map_outgoing(int peer, Connection *con,
-			   OSDMapRef map = OSDMapRef());
 
   void wait_for_new_map(OpRequestRef op);
   void handle_osd_map(class MOSDMap *m);
