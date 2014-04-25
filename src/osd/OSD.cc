@@ -7846,9 +7846,6 @@ bool OSD::op_is_discardable(MOSDOp *op)
   return false;
 }
 
-/*
- * enqueue called with osd_lock held
- */
 void OSD::enqueue_op(PG *pg, OpRequestRef op)
 {
   utime_t latency = ceph_clock_now(cct) - op->get_req()->get_recv_stamp();
