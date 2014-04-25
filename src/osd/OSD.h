@@ -427,6 +427,8 @@ public:
   epoch_t note_peer_epoch(int p, epoch_t e);
   void forget_peer_epoch(int p, epoch_t e);
 
+  MOSDMap *build_incremental_map_msg(epoch_t from, epoch_t to,
+                                       OSDSuperblock& superblock);
   bool should_share_map(entity_name_t name, Connection *con, epoch_t epoch,
                         OSDMapRef& osdmap, const epoch_t *sent_epoch_p);
   void share_map_incoming(entity_name_t name, Connection *con, epoch_t epoch,
@@ -1420,12 +1422,7 @@ private:
   void pin_map_inc_bl(epoch_t e, bufferlist &bl) {
     return service.pin_map_inc_bl(e, bl);
   }
-  bool get_inc_map_bl(epoch_t e, bufferlist& bl) {
-    return service.get_inc_map_bl(e, bl);
-  }
 
-  MOSDMap *build_incremental_map_msg(epoch_t from, epoch_t to,
-                                     OSDSuperblock& superblock);
   void send_incremental_map(epoch_t since, Connection *con, OSDMapRef& osdmap);
   void send_map(MOSDMap *m, Connection *con);
 

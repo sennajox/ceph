@@ -6214,12 +6214,12 @@ void OSD::activate_map()
 }
 
 
-MOSDMap *OSD::build_incremental_map_msg(epoch_t since, epoch_t to,
-                                        OSDSuperblock& superblock)
+MOSDMap *OSDService::build_incremental_map_msg(epoch_t since, epoch_t to,
+                                               OSDSuperblock& sblock)
 {
   MOSDMap *m = new MOSDMap(monc->get_fsid());
-  m->oldest_map = superblock.oldest_map;
-  m->newest_map = superblock.newest_map;
+  m->oldest_map = sblock.oldest_map;
+  m->newest_map = sblock.newest_map;
   
   for (epoch_t e = to; e > since; e--) {
     bufferlist bl;
@@ -6276,7 +6276,7 @@ void OSD::send_incremental_map(epoch_t since, Connection *con,
     
     if (to - since > (epoch_t)cct->_conf->osd_map_message_max)
       to = since + cct->_conf->osd_map_message_max;
-    m = build_incremental_map_msg(since, to, superblock);
+    m = service.build_incremental_map_msg(since, to, superblock);
   }
   send_map(m, con);
 }
