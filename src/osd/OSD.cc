@@ -6240,7 +6240,7 @@ MOSDMap *OSDService::build_incremental_map_msg(epoch_t since, epoch_t to,
   return m;
 }
 
-void OSD::send_map(MOSDMap *m, Connection *con)
+void OSDService::send_map(MOSDMap *m, Connection *con)
 {
   Messenger *msgr = client_messenger;
   if (entity_name_t::TYPE_OSD == con->get_peer_type())
@@ -6264,7 +6264,7 @@ void OSD::send_incremental_map(epoch_t since, Connection *con,
       m->oldest_map = superblock.oldest_map;
       m->newest_map = superblock.newest_map;
       get_map_bl(to, m->maps[to]);
-      send_map(m, con);
+      service.send_map(m, con);
       return;
     }
     
@@ -6278,7 +6278,7 @@ void OSD::send_incremental_map(epoch_t since, Connection *con,
       to = since + cct->_conf->osd_map_message_max;
     m = service.build_incremental_map_msg(since, to, superblock);
   }
-  send_map(m, con);
+  service.send_map(m, con);
 }
 
 bool OSDService::_get_map_bl(epoch_t e, bufferlist& bl)

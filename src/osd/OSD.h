@@ -427,6 +427,7 @@ public:
   epoch_t note_peer_epoch(int p, epoch_t e);
   void forget_peer_epoch(int p, epoch_t e);
 
+  void send_map(class MOSDMap *m, Connection *con);
   MOSDMap *build_incremental_map_msg(epoch_t from, epoch_t to,
                                        OSDSuperblock& superblock);
   bool should_share_map(entity_name_t name, Connection *con, epoch_t epoch,
@@ -1424,7 +1425,6 @@ private:
   }
 
   void send_incremental_map(epoch_t since, Connection *con, OSDMapRef& osdmap);
-  void send_map(MOSDMap *m, Connection *con);
 
 protected:
   // -- placement groups --
