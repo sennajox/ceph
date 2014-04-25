@@ -4384,7 +4384,7 @@ void OSD::do_command(Connection *con, ceph_tid_t tid, vector<string>& cmd, buffe
 
 	  // send them the latest diff to ensure they realize the mapping
 	  // has changed.
-	  send_incremental_map(osdmap->get_epoch() - 1, con, osdmap);
+	  service.send_incremental_map(osdmap->get_epoch() - 1, con, osdmap);
 
 	  // do not reply; they will get newer maps and realize they
 	  // need to resend.
@@ -4740,7 +4740,7 @@ void OSDService::share_map_incoming(
           << " < " << osdmap->get_epoch() << dendl;
       // we know the Session is valid or we wouldn't be sending
       *sent_epoch_p = osdmap->get_epoch();
-      osd->send_incremental_map(epoch, con, osdmap);
+      send_incremental_map(epoch, con, osdmap);
     } else if (con->get_messenger() == osd->cluster_messenger &&
         osdmap->is_up(name.num()) &&
         (osdmap->get_cluster_addr(name.num()) == con->get_peer_addr() ||
@@ -4749,7 +4749,7 @@ void OSDService::share_map_incoming(
 	               << " has old map " << epoch << " < "
 	               << osdmap->get_epoch() << dendl;
       note_peer_epoch(name.num(), osdmap->get_epoch());
-      osd->send_incremental_map(epoch, con, osdmap);
+      send_incremental_map(epoch, con, osdmap);
     }
   }
 }
@@ -4764,7 +4764,7 @@ void OSD::_share_map_outgoing(int peer, Connection *con, OSDMapRef map)
   epoch_t pe = service.get_peer_epoch(peer);
   if (pe) {
     if (pe < map->get_epoch()) {
-      send_incremental_map(pe, con, map);
+      service.send_incremental_map(pe, con, map);
       service.note_peer_epoch(peer, map->get_epoch());
     } else
       dout(20) << "_share_map_outgoing " << con << " already has epoch " << pe << dendl;
@@ -6248,8 +6248,8 @@ void OSDService::send_map(MOSDMap *m, Connection *con)
   msgr->send_message(m, con);
 }
 
-void OSD::send_incremental_map(epoch_t since, Connection *con,
-                               OSDMapRef& osdmap)
+void OSDService::send_incremental_map(epoch_t since, Connection *con,
+                                      OSDMapRef& osdmap)
 {
   epoch_t to = osdmap->get_epoch();
   dout(10) << "send_incremental_map " << since << " -> " << to
@@ -6257,14 +6257,14 @@ void OSD::send_incremental_map(epoch_t since, Connection *con,
 
   MOSDMap *m = NULL;
   while (!m) {
-    OSDSuperblock superblock(service.get_superblock());
-    if (since < superblock.oldest_map) {
+    OSDSuperblock sblock(get_superblock());
+    if (since < sblock.oldest_map) {
       // just send latest full map
       MOSDMap *m = new MOSDMap(monc->get_fsid());
-      m->oldest_map = superblock.oldest_map;
-      m->newest_map = superblock.newest_map;
+      m->oldest_map = sblock.oldest_map;
+      m->newest_map = sblock.newest_map;
       get_map_bl(to, m->maps[to]);
-      service.send_map(m, con);
+      send_map(m, con);
       return;
     }
     
@@ -6276,9 +6276,9 @@ void OSD::send_incremental_map(epoch_t since, Connection *con,
     
     if (to - since > (epoch_t)cct->_conf->osd_map_message_max)
       to = since + cct->_conf->osd_map_message_max;
-    m = service.build_incremental_map_msg(since, to, superblock);
+    m = build_incremental_map_msg(since, to, sblock);
   }
-  service.send_map(m, con);
+  send_map(m, con);
 }
 
 bool OSDService::_get_map_bl(epoch_t e, bufferlist& bl)
