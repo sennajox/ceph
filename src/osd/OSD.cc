@@ -1836,10 +1836,9 @@ PG *OSD::_open_lock_pg(
     RWLock::WLocker l(pg_map_lock);
     pg->lock(no_lockdep_check);
     pg_map[pgid] = pg;
+    pg->get("PGMap");  // because it's in pg_map
     wake_pg_waiters(pg, pgid);
   }
-
-  pg->get("PGMap");  // because it's in pg_map
   return pg;
 }
 
