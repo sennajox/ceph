@@ -194,6 +194,7 @@ OSDService::OSDService(OSD *osd) :
   class_handler(osd->class_handler),
   publish_lock("OSDService::publish_lock"),
   pre_publish_lock("OSDService::pre_publish_lock"),
+  peer_map_epoch_lock("OSDService::peer_map_epoch_lock"),
   sched_scrub_lock("OSDService::sched_scrub_lock"), scrubs_pending(0),
   scrubs_active(0),
   agent_lock("OSD::agent_lock"),
@@ -914,7 +915,6 @@ OSD::OSD(CephContext *cct_, ObjectStore *store_,
   op_wq(this, cct->_conf->osd_op_thread_timeout, &op_tp),
   peering_wq(this, cct->_conf->osd_op_thread_timeout, &op_tp),
   map_lock("OSD::map_lock"),
-  peer_map_epoch_lock("OSD::peer_map_epoch_lock"),
   pg_map_lock("OSD::pg_map_lock"),
   debug_drop_pg_create_probability(cct->_conf->osd_debug_drop_pg_create_probability),
   debug_drop_pg_create_duration(cct->_conf->osd_debug_drop_pg_create_duration),
@@ -2993,7 +2993,7 @@ void OSD::handle_osd_ping(MOSDPing *m)
       m->get_connection()->get_messenger()->send_message(r, m->get_connection());
 
       if (curmap->is_up(from)) {
-	note_peer_epoch(from, m->map_epoch);
+	service.note_peer_epoch(from, m->map_epoch);
 	if (is_active()) {
 	  ConnectionRef con = service.get_con_osd_cluster(from, curmap->get_epoch());
 	  if (con) {
@@ -3040,7 +3040,7 @@ void OSD::handle_osd_ping(MOSDPing *m)
 
       if (m->map_epoch &&
 	  curmap->is_up(from)) {
-	note_peer_epoch(from, m->map_epoch);
+	service.note_peer_epoch(from, m->map_epoch);
 	if (is_active()) {
 	  ConnectionRef con = service.get_con_osd_cluster(from, curmap->get_epoch());
 	  if (con) {
@@ -4632,7 +4632,7 @@ void OSD::do_command(Connection *con, ceph_tid_t tid, vector<string>& cmd, buffe
 // --------------------------------------
 // dispatch
 
-epoch_t OSD::get_peer_epoch(int peer)
+epoch_t OSDService::get_peer_epoch(int peer)
 {
   Mutex::Locker l(peer_map_epoch_lock);
   map<int,epoch_t>::iterator p = peer_map_epoch.find(peer);
@@ -4641,7 +4641,7 @@ epoch_t OSD::get_peer_epoch(int peer)
   return p->second;
 }
 
-epoch_t OSD::note_peer_epoch(int peer, epoch_t e)
+epoch_t OSDService::note_peer_epoch(int peer, epoch_t e)
 {
   Mutex::Locker l(peer_map_epoch_lock);
   map<int,epoch_t>::iterator p = peer_map_epoch.find(peer);
@@ -4660,7 +4660,7 @@ epoch_t OSD::note_peer_epoch(int peer, epoch_t e)
   }
 }
  
-void OSD::forget_peer_epoch(int peer, epoch_t as_of) 
+void OSDService::forget_peer_epoch(int peer, epoch_t as_of)
 {
   Mutex::Locker l(peer_map_epoch_lock);
   map<int,epoch_t>::iterator p = peer_map_epoch.find(peer);
@@ -4704,7 +4704,7 @@ bool OSDService::should_share_map(entity_name_t name, Connection *con,
       (osdmap->get_cluster_addr(name.num()) == con->get_peer_addr() ||
        osdmap->get_hb_back_addr(name.num()) == con->get_peer_addr())) {
     // remember
-    epoch_t has = MAX(osd->get_peer_epoch(name.num()), epoch);
+    epoch_t has = MAX(get_peer_epoch(name.num()), epoch);
 
     // share?
     if (has < osdmap->get_epoch()) {
@@ -4748,7 +4748,7 @@ void OSDService::share_map_incoming(
       dout(10) << name << " " << con->get_peer_addr()
 	               << " has old map " << epoch << " < "
 	               << osdmap->get_epoch() << dendl;
-      osd->note_peer_epoch(name.num(), osdmap->get_epoch());
+      note_peer_epoch(name.num(), osdmap->get_epoch());
       osd->send_incremental_map(epoch, con, osdmap);
     }
   }
@@ -4761,11 +4761,11 @@ void OSD::_share_map_outgoing(int peer, Connection *con, OSDMapRef map)
     map = service.get_osdmap();
 
   // send map?
-  epoch_t pe = get_peer_epoch(peer);
+  epoch_t pe = service.get_peer_epoch(peer);
   if (pe) {
     if (pe < map->get_epoch()) {
       send_incremental_map(pe, con, map);
-      note_peer_epoch(peer, map->get_epoch());
+      service.note_peer_epoch(peer, map->get_epoch());
     } else
       dout(20) << "_share_map_outgoing " << con << " already has epoch " << pe << dendl;
   } else {
@@ -5553,7 +5553,7 @@ void OSD::note_down_osd(int peer)
 
 void OSD::note_up_osd(int peer)
 {
-  forget_peer_epoch(peer, osdmap->get_epoch() - 1);
+  service.forget_peer_epoch(peer, osdmap->get_epoch() - 1);
 }
 
 struct C_OnMapApply : public Context {

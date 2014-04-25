@@ -419,6 +419,14 @@ public:
     }
   }
 
+private:
+  Mutex peer_map_epoch_lock;
+  map<int, epoch_t> peer_map_epoch;
+public:
+  epoch_t get_peer_epoch(int p);
+  epoch_t note_peer_epoch(int p, epoch_t e);
+  void forget_peer_epoch(int p, epoch_t e);
+
   bool should_share_map(entity_name_t name, Connection *con, epoch_t epoch,
                         OSDMapRef& osdmap, const epoch_t *sent_epoch_p);
   void share_map_incoming(entity_name_t name, Connection *con, epoch_t epoch,
@@ -1369,13 +1377,6 @@ private:
   utime_t         had_map_since;
   RWLock          map_lock;
   list<OpRequestRef>  waiting_for_osdmap;
-
-  Mutex peer_map_epoch_lock;
-  map<int, epoch_t> peer_map_epoch;
-  
-  epoch_t get_peer_epoch(int p);
-  epoch_t note_peer_epoch(int p, epoch_t e);
-  void forget_peer_epoch(int p, epoch_t e);
 
   friend struct send_map_on_destruct;
 
